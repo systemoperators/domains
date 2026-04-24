@@ -13,7 +13,7 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { createCustomHostname, deleteCustomHostname, getCustomHostname } from './cloudflare.js';
-import { verifyCNAME, checkSSL as checkSSLDirect } from './dns.js';
+import { verifyCNAME, lookupDNS, checkSSL as checkSSLDirect } from './dns.js';
 import { isDomainReady, getDomainStatusSummary } from './domain-helpers.js';
 
 const DEFAULTS = {
@@ -159,7 +159,13 @@ export class DomainVerifier {
       throw new Error(`Domain ${hostname} not found in store`);
     }
 
-    const apex = await verifyCNAME(hostname, record.targetDomain, 'cloudflare');
+    let apex = await verifyCNAME(hostname, record.targetDomain, 'cloudflare');
+    if (!apex && record.cfHostnameId) {
+      const txt = await lookupDNS(hostname, 'TXT', '_cf-custom-hostname', 'cloudflare');
+      if (txt && txt.includes(record.cfHostnameId)) {
+        apex = true;
+      }
+    }
     const www = record.wwwEnabled
       ? await verifyCNAME(`www.${hostname}`, record.targetDomain, 'cloudflare')
       : true;
@@ -198,8 +204,15 @@ export class DomainVerifier {
       throw new Error(`Domain ${hostname} not found in store`);
     }
 
-    // check DNS
-    const apexDns = await verifyCNAME(hostname, record.targetDomain, 'cloudflare');
+    // check DNS — try CNAME first, fall back to TXT DCV for apex domains
+    let apexDns = await verifyCNAME(hostname, record.targetDomain, 'cloudflare');
+    if (!apexDns && record.cfHostnameId) {
+      // apex domains can't have CNAME records — check TXT-based DCV instead
+      const txt = await lookupDNS(hostname, 'TXT', '_cf-custom-hostname', 'cloudflare');
+      if (txt && txt.includes(record.cfHostnameId)) {
+        apexDns = true;
+      }
+    }
     const wwwDns = record.wwwEnabled
       ? await verifyCNAME(`www.${hostname}`, record.targetDomain, 'cloudflare')
       : true;
@@ -280,7 +293,13 @@ export class DomainVerifier {
   private async verifyDNSPhase(record: DomainRecord, step?: WorkflowStep): Promise<boolean> {
     for (let attempt = 1; attempt <= this.config.dnsRetries; attempt++) {
       const doCheck = async () => {
-        const apexOk = await verifyCNAME(record.hostname, record.targetDomain, 'cloudflare');
+        let apexOk = await verifyCNAME(record.hostname, record.targetDomain, 'cloudflare');
+        if (!apexOk && record.cfHostnameId) {
+          const txt = await lookupDNS(record.hostname, 'TXT', '_cf-custom-hostname', 'cloudflare');
+          if (txt && txt.includes(record.cfHostnameId)) {
+            apexOk = true;
+          }
+        }
         const wwwOk = record.wwwEnabled
           ? await verifyCNAME(`www.${record.hostname}`, record.targetDomain, 'cloudflare')
           : true;
