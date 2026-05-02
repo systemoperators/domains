@@ -272,9 +272,10 @@ export class DomainVerifier {
   }
 
   /**
-   * Recheck all active domains. Call this from a cron job.
+   * Monitor active domains for regression (DNS lost, SSL expired).
+   * Call from a cron job.
    */
-  async recheckAll(): Promise<{ checked: number; lost: string[] }> {
+  async monitorActive(): Promise<{ checked: number; lost: string[] }> {
     const active = await this.store.listActive();
     const lost: string[] = [];
 
@@ -286,6 +287,40 @@ export class DomainVerifier {
     }
 
     return { checked: active.length, lost };
+  }
+
+  /**
+   * Monitor pending/failed domains for provisioning completion.
+   * Rechecks domains where sslStatus != 'active' — picks up domains
+   * that finished SSL provisioning after the initial workflow timed out.
+   */
+  async monitorPending(): Promise<{ checked: number; activated: string[] }> {
+    const pending = await this.store.listPending();
+    const activated: string[] = [];
+
+    for (const record of pending) {
+      const status = await this.recheck(record.hostname);
+      if (status.overall === 'active') {
+        activated.push(record.hostname);
+      }
+    }
+
+    return { checked: pending.length, activated };
+  }
+
+  /**
+   * Recheck all domains (both active and pending). Convenience method
+   * that calls monitorActive() + monitorPending(). Call from a cron job.
+   */
+  async recheckAll(): Promise<{
+    active: { checked: number; lost: string[] };
+    pending: { checked: number; activated: string[] };
+  }> {
+    const [active, pending] = await Promise.all([
+      this.monitorActive(),
+      this.monitorPending(),
+    ]);
+    return { active, pending };
   }
 
   // -- private --

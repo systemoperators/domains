@@ -16,21 +16,36 @@ export function isValidDomain(domain: string): boolean {
 }
 
 /**
- * Generate required DNS records for a custom domain
+ * Generate required DNS records for a custom domain.
+ * For apex domains, includes a TXT DCV record as an alternative to CNAME
+ * (since many DNS providers don't allow CNAME at root).
  */
 export function generateDNSRecords(
   hostname: string,
   targetDomain: string,
-  wwwEnabled: boolean = false
+  wwwEnabled: boolean = false,
+  cfHostnameId?: string | null,
 ): DNSRecord[] {
+  const isApex = hostname.split('.').length === 2;
+
   const records: DNSRecord[] = [
     {
       type: 'CNAME',
-      name: '@',
+      name: isApex ? '@' : hostname.split('.')[0],
       content: targetDomain,
       ttl: 3600,
     },
   ];
+
+  // apex domains: add TXT DCV as alternative (most providers can't do CNAME at root)
+  if (isApex && cfHostnameId) {
+    records.push({
+      type: 'TXT',
+      name: `_cf-custom-hostname.${hostname}`,
+      content: cfHostnameId,
+      ttl: 3600,
+    });
+  }
 
   if (wwwEnabled) {
     records.push({

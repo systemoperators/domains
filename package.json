@@ -1,6 +1,6 @@
 {
   "name": "@systemoperator/domains",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Custom domain verification for Cloudflare SaaS - DNS, SSL, Custom Hostnames",
   "license": "MIT",
   "type": "module",

@@ -46,6 +46,11 @@ function makeStore(initial: DomainRecord[] = []): DomainStore & { records: Map<s
         (r) => r.sslStatus === 'active'
       );
     },
+    async listPending() {
+      return Array.from(records.values()).filter(
+        (r) => r.sslStatus !== 'active'
+      );
+    },
   };
 }
 
@@ -288,8 +293,8 @@ describe('DomainVerifier', () => {
     });
   });
 
-  describe('recheckAll', () => {
-    it('rechecks all active domains and reports lost ones', async () => {
+  describe('monitorActive', () => {
+    it('rechecks active domains and reports lost ones', async () => {
       mockFetch((url) => {
         // DNS: only good.example.com has valid DNS
         if (url.includes('dns') && url.includes('good.example.com')) {
@@ -347,10 +352,115 @@ describe('DomainVerifier', () => {
         store,
       });
 
-      const result = await verifier.recheckAll();
+      const result = await verifier.monitorActive();
       expect(result.checked).toBe(2);
       expect(result.lost).toContain('bad.example.com');
       expect(result.lost).not.toContain('good.example.com');
+    });
+  });
+
+  describe('monitorPending', () => {
+    it('rechecks pending domains and reports activated ones', async () => {
+      mockFetch((url) => {
+        // DNS: pending domain now has valid DNS
+        if (url.includes('dns') && url.includes('pending.example.com')) {
+          return { Status: 0, Answer: [{ type: 5, data: 'custom.myapp.com.' }] };
+        }
+        if (url.includes('dns')) {
+          return { Status: 0, Answer: [] };
+        }
+        // CF API: pending domain now has active SSL
+        if (url.includes('/custom_hostnames/cf-pending')) {
+          return {
+            success: true,
+            result: {
+              id: 'cf-pending',
+              hostname: 'pending.example.com',
+              ssl: { status: 'active', method: 'http', type: 'dv' },
+              status: 'active',
+            },
+          };
+        }
+        return { success: false };
+      });
+
+      const store = makeStore([
+        makeRecord({
+          hostname: 'pending.example.com',
+          cfHostnameId: 'cf-pending',
+          dnsStatus: 'verified',
+          sslStatus: 'failed',
+          error: 'SSL activation failed after all retries',
+        }),
+      ]);
+
+      const verifier = new DomainVerifier({
+        cfApiToken: 'test-token',
+        cfZoneId: 'test-zone',
+        store,
+      });
+
+      const result = await verifier.monitorPending();
+      expect(result.checked).toBe(1);
+      expect(result.activated).toContain('pending.example.com');
+
+      // verify the store was updated
+      const updated = store.records.get('pending.example.com')!;
+      expect(updated.sslStatus).toBe('active');
+      expect(updated.error).toBeNull();
+    });
+  });
+
+  describe('recheckAll', () => {
+    it('calls both monitorActive and monitorPending', async () => {
+      mockFetch((url) => {
+        // DNS: both domains have valid DNS
+        if (url.includes('dns')) {
+          return { Status: 0, Answer: [{ type: 5, data: 'custom.myapp.com.' }] };
+        }
+        // CF API: both have active SSL
+        if (url.includes('/custom_hostnames/')) {
+          const id = url.split('/custom_hostnames/')[1];
+          return {
+            success: true,
+            result: {
+              id,
+              hostname: id === 'cf-active' ? 'active.example.com' : 'pending.example.com',
+              ssl: { status: 'active', method: 'http', type: 'dv' },
+              status: 'active',
+            },
+          };
+        }
+        return { success: false };
+      });
+
+      const store = makeStore([
+        makeRecord({
+          hostname: 'active.example.com',
+          cfHostnameId: 'cf-active',
+          dnsStatus: 'verified',
+          sslStatus: 'active',
+          verifiedAt: Date.now(),
+        }),
+        makeRecord({
+          hostname: 'pending.example.com',
+          cfHostnameId: 'cf-pending',
+          dnsStatus: 'verified',
+          sslStatus: 'pending',
+        }),
+      ]);
+
+      const verifier = new DomainVerifier({
+        cfApiToken: 'test-token',
+        cfZoneId: 'test-zone',
+        store,
+      });
+
+      const result = await verifier.recheckAll();
+      expect(result.active.checked).toBe(1);
+      expect(result.active.lost).toHaveLength(0);
+      expect(result.pending.checked).toBe(1);
+      expect(result.pending.activated).toContain('pending.example.com');
     });
   });
 

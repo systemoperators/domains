@@ -8,6 +8,7 @@ export interface DomainStore {
   get(hostname: string): Promise<DomainRecord | null>;
   updateStatus(hostname: string, update: DomainStatusUpdate): Promise<void>;
   listActive(): Promise<DomainRecord[]>;
+  listPending(): Promise<DomainRecord[]>;
 }
 
 /** Domain record managed by the package */
